@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useRef } from "react"
+import { useState, useEffect, useRef, useCallback } from "react"
 import { motion, AnimatePresence, useAnimation, useScroll, useTransform } from "framer-motion"
 import { Heart, Music, Sparkles, Gift, Star, Cake, Coffee, Camera, Plane } from "lucide-react"
 import VinylPlayer from "./components/vinyl-player"
@@ -68,8 +68,9 @@ export default function BirthdayMemoryWebsite() {
   const [showCelebration, setShowCelebration] = useState(true)
   const [activeMemory, setActiveMemory] = useState<number | null>(null)
   const [audioLoaded, setAudioLoaded] = useState(false)
-  const [audioError, setAudioError] = useState<string | null>(null)
+  const [userInteracted, setUserInteracted] = useState(false)
   const audioRef = useRef<HTMLAudioElement>(null)
+  const playPromiseRef = useRef<Promise<void> | null>(null)
   const { scrollYProgress } = useScroll()
   const timelineProgress = useTransform(scrollYProgress, [0.2, 0.9], [0, 1])
   const controls = useAnimation()
@@ -85,126 +86,161 @@ export default function BirthdayMemoryWebsite() {
     controls.start({ opacity: 1, y: 0 })
   }, [controls])
 
-  const toggleMusic = async () => {
-    if (!audioRef.current) {
-      setAudioError("Audio element not found")
+  // Track user interaction for autoplay policy
+  useEffect(() => {
+    const handleUserInteraction = () => {
+      setUserInteracted(true)
+      document.removeEventListener("click", handleUserInteraction)
+      document.removeEventListener("touchstart", handleUserInteraction)
+    }
+
+    document.addEventListener("click", handleUserInteraction)
+    document.addEventListener("touchstart", handleUserInteraction)
+
+    return () => {
+      document.removeEventListener("click", handleUserInteraction)
+      document.removeEventListener("touchstart", handleUserInteraction)
+    }
+  }, [])
+
+  const toggleMusic = useCallback(async () => {
+    if (!audioRef.current || !audioLoaded) {
       return
     }
 
+    const audio = audioRef.current
+
     try {
+      // Wait for any pending play promise to resolve
+      if (playPromiseRef.current) {
+        await playPromiseRef.current
+        playPromiseRef.current = null
+      }
+
       if (isPlaying) {
-        audioRef.current.pause()
+        // Pause the audio
+        audio.pause()
         setIsPlaying(false)
       } else {
-        // Reset the audio to beginning if it ended
-        if (audioRef.current.ended) {
-          audioRef.current.currentTime = 0
+        // Only try to play if user has interacted
+        if (!userInteracted) {
+          alert("Please click anywhere on the page first to enable music playback.")
+          return
         }
 
-        // Try to play the audio
-        const playPromise = audioRef.current.play()
-
-        if (playPromise !== undefined) {
-          await playPromise
-          setIsPlaying(true)
-          setAudioError(null)
+        // Reset audio if it ended
+        if (audio.ended) {
+          audio.currentTime = 0
         }
+
+        // Start playing
+        playPromiseRef.current = audio.play()
+        await playPromiseRef.current
+        playPromiseRef.current = null
+        setIsPlaying(true)
       }
     } catch (error: any) {
       console.error("Audio playback failed:", error)
       setIsPlaying(false)
+      playPromiseRef.current = null
 
-      // Handle different types of errors
-      if (error.name === "NotAllowedError") {
-        setAudioError("Browser blocked autoplay. Please click the play button to start music.")
-      } else if (error.name === "NotSupportedError") {
-        setAudioError("Audio format not supported by your browser.")
-      } else if (error.name === "AbortError") {
-        setAudioError("Audio playback was interrupted.")
+      // Handle specific error types
+      if (error.name === "AbortError") {
+        // Don't show error for abort - this is normal when rapidly clicking
+        return
+      } else if (error.name === "NotAllowedError") {
+        alert("Please interact with the page first to enable music playback.")
       } else {
-        setAudioError(`Audio error: ${error.message}`)
+        console.warn("Audio error:", error.message)
       }
     }
-  }
+  }, [audioLoaded, isPlaying, userInteracted])
 
   useEffect(() => {
     const audio = audioRef.current
-    if (audio) {
-      const handleCanPlayThrough = () => {
-        setAudioLoaded(true)
-        setAudioError(null)
-        console.log("Audio loaded successfully")
-      }
+    if (!audio) return
 
-      const handlePlay = () => {
-        setIsPlaying(true)
-        setAudioError(null)
-      }
+    const handleCanPlayThrough = () => {
+      setAudioLoaded(true)
+      console.log("Audio loaded successfully")
+    }
 
-      const handlePause = () => {
-        setIsPlaying(false)
-      }
+    const handlePlay = () => {
+      setIsPlaying(true)
+    }
 
-      const handleEnded = () => {
-        setIsPlaying(false)
-      }
+    const handlePause = () => {
+      setIsPlaying(false)
+    }
 
-      const handleError = (e: Event) => {
-        setIsPlaying(false)
-        setAudioLoaded(false)
-        const target = e.target as HTMLAudioElement
-        let errorMessage = "Unknown audio error"
+    const handleEnded = () => {
+      setIsPlaying(false)
+      playPromiseRef.current = null
+    }
 
-        if (target.error) {
-          switch (target.error.code) {
-            case target.error.MEDIA_ERR_ABORTED:
-              errorMessage = "Audio loading was aborted"
-              break
-            case target.error.MEDIA_ERR_NETWORK:
-              errorMessage = "Network error while loading audio"
-              break
-            case target.error.MEDIA_ERR_DECODE:
-              errorMessage = "Audio decoding error"
-              break
-            case target.error.MEDIA_ERR_SRC_NOT_SUPPORTED:
-              errorMessage = "Audio file not found or format not supported"
-              break
-          }
-        }
+    const handleError = (e: Event) => {
+      setIsPlaying(false)
+      setAudioLoaded(false)
+      playPromiseRef.current = null
+      console.error("Audio loading error:", e)
+    }
 
-        setAudioError(errorMessage)
-        console.error("Audio error:", errorMessage)
-      }
+    const handleLoadStart = () => {
+      console.log("Audio loading started")
+    }
 
-      const handleLoadStart = () => {
-        console.log("Audio loading started")
-      }
+    const handleLoadedData = () => {
+      setAudioLoaded(true)
+      console.log("Audio data loaded")
+    }
 
-      const handleLoadedData = () => {
-        console.log("Audio data loaded")
-        setAudioLoaded(true)
-      }
+    const handleWaiting = () => {
+      console.log("Audio waiting for data")
+    }
 
-      // Add event listeners
-      audio.addEventListener("canplaythrough", handleCanPlayThrough)
-      audio.addEventListener("play", handlePlay)
-      audio.addEventListener("pause", handlePause)
-      audio.addEventListener("ended", handleEnded)
-      audio.addEventListener("error", handleError)
-      audio.addEventListener("loadstart", handleLoadStart)
-      audio.addEventListener("loadeddata", handleLoadedData)
+    const handleStalled = () => {
+      console.log("Audio stalled")
+    }
 
-      // Try to load the audio
-      audio.load()
+    // Add all event listeners
+    audio.addEventListener("canplaythrough", handleCanPlayThrough)
+    audio.addEventListener("play", handlePlay)
+    audio.addEventListener("pause", handlePause)
+    audio.addEventListener("ended", handleEnded)
+    audio.addEventListener("error", handleError)
+    audio.addEventListener("loadstart", handleLoadStart)
+    audio.addEventListener("loadeddata", handleLoadedData)
+    audio.addEventListener("waiting", handleWaiting)
+    audio.addEventListener("stalled", handleStalled)
 
-      return () => {
-        audio.removeEventListener("canplaythrough", handleCanPlayThrough)
-        audio.removeEventListener("play", handlePlay)
-        audio.removeEventListener("pause", handlePause)
-        audio.removeEventListener("ended", handleEnded)
-        audio.removeEventListener("error", handleError)
-        audio.removeEventListener("loadstart", handleLoadStart)
-        audio.removeEventListener("loadeddata", handleLoadedData)
+    // Set audio properties
+    audio.preload = "auto"
+    audio.loop = true
+
+    // Load the audio
+    audio.load()
+
+    return () => {
+      // Clean up event listeners
+      audio.removeEventListener("canplaythrough", handleCanPlayThrough)
+      audio.removeEventListener("play", handlePlay)
+      audio.removeEventListener("pause", handlePause)
+      audio.removeEventListener("ended", handleEnded)
+      audio.removeEventListener("error", handleError)
+      audio.removeEventListener("loadstart", handleLoadStart)
+      audio.removeEventListener("loadeddata", handleLoadedData)
+      audio.removeEventListener("waiting", handleWaiting)
+      audio.removeEventListener("stalled", handleStalled)
+    }
+  }, [])
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      if (playPromiseRef.current) {
+        playPromiseRef.current.catch(() => {
+          // Ignore errors on cleanup
+        })
       }
     }
   }, [])
@@ -212,22 +248,22 @@ export default function BirthdayMemoryWebsite() {
   return (
     <div className="min-h-screen bg-gradient-to-br from-peach-50 to-rose-50 relative overflow-hidden">
       {/* Background Audio */}
-      <audio ref={audioRef} loop preload="auto">
+      <audio ref={audioRef} preload="auto" playsInline crossOrigin="anonymous">
         <source src="/Perfect-(Mr-Jat.in).mp3" type="audio/mpeg" />
         Your browser does not support the audio element.
       </audio>
-
-      {/* Audio Debug Info - Will be hidden after confirming it works */}
-      {audioError && (
-        <div className="fixed top-20 right-4 bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded z-50 max-w-sm text-sm">
-          <strong>Audio Error:</strong> {audioError}
-        </div>
-      )}
 
       {/* Vinyl Player - Mobile Responsive */}
       <div className="fixed top-4 right-4 sm:top-6 sm:right-6 z-40">
         <VinylPlayer isPlaying={isPlaying} togglePlay={toggleMusic} />
       </div>
+
+      {/* User Interaction Prompt */}
+      {!userInteracted && (
+        <div className="fixed top-20 right-4 bg-peach-100 border border-peach-400 text-peach-700 px-4 py-3 rounded z-50 max-w-sm text-sm">
+          <strong>🎵 Music Ready!</strong> Click anywhere to enable audio playback.
+        </div>
+      )}
 
       {/* Floating Elements */}
       <div className="fixed inset-0 pointer-events-none z-0 overflow-hidden">
