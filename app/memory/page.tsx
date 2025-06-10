@@ -123,7 +123,7 @@ export default function MemoryPage() {
                 loop
                 controls
               >
-                <source src="/videos/trekking-adventure.mp4" type="video/mp4" />
+                <source src="/public/trekking video" type="video/mp4" />
                 Your browser does not support the video tag.
               </video>
 
