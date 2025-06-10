@@ -67,10 +67,10 @@ export default function BirthdayMemoryWebsite() {
   const [isPlaying, setIsPlaying] = useState(false)
   const [showCelebration, setShowCelebration] = useState(true)
   const [activeMemory, setActiveMemory] = useState<number | null>(null)
-  const [audioLoaded, setAudioLoaded] = useState(false)
+  const [audioReady, setAudioReady] = useState(false)
   const [userInteracted, setUserInteracted] = useState(false)
+  const [isProcessing, setIsProcessing] = useState(false)
   const audioRef = useRef<HTMLAudioElement>(null)
-  const playPromiseRef = useRef<Promise<void> | null>(null)
   const { scrollYProgress } = useScroll()
   const timelineProgress = useTransform(scrollYProgress, [0.2, 0.9], [0, 1])
   const controls = useAnimation()
@@ -92,33 +92,36 @@ export default function BirthdayMemoryWebsite() {
       setUserInteracted(true)
       document.removeEventListener("click", handleUserInteraction)
       document.removeEventListener("touchstart", handleUserInteraction)
+      document.removeEventListener("keydown", handleUserInteraction)
     }
 
     document.addEventListener("click", handleUserInteraction)
     document.addEventListener("touchstart", handleUserInteraction)
+    document.addEventListener("keydown", handleUserInteraction)
 
     return () => {
       document.removeEventListener("click", handleUserInteraction)
       document.removeEventListener("touchstart", handleUserInteraction)
+      document.removeEventListener("keydown", handleUserInteraction)
     }
   }, [])
 
   const toggleMusic = useCallback(async () => {
-    if (!audioRef.current || !audioLoaded) {
+    // Prevent multiple simultaneous calls
+    if (isProcessing) {
       return
     }
 
     const audio = audioRef.current
+    if (!audio || !audioReady) {
+      return
+    }
+
+    setIsProcessing(true)
 
     try {
-      // Wait for any pending play promise to resolve
-      if (playPromiseRef.current) {
-        await playPromiseRef.current
-        playPromiseRef.current = null
-      }
-
       if (isPlaying) {
-        // Pause the audio
+        // Simple pause - no await needed
         audio.pause()
         setIsPlaying(false)
       } else {
@@ -133,36 +136,47 @@ export default function BirthdayMemoryWebsite() {
           audio.currentTime = 0
         }
 
-        // Start playing
-        playPromiseRef.current = audio.play()
-        await playPromiseRef.current
-        playPromiseRef.current = null
-        setIsPlaying(true)
-      }
-    } catch (error: any) {
-      console.error("Audio playback failed:", error)
-      setIsPlaying(false)
-      playPromiseRef.current = null
+        // Use a simple approach - let the browser handle the promise
+        const playResult = audio.play()
 
-      // Handle specific error types
-      if (error.name === "AbortError") {
-        // Don't show error for abort - this is normal when rapidly clicking
-        return
-      } else if (error.name === "NotAllowedError") {
-        alert("Please interact with the page first to enable music playback.")
-      } else {
-        console.warn("Audio error:", error.message)
+        // Only handle the promise if it exists (some browsers don't return a promise)
+        if (playResult && typeof playResult.then === "function") {
+          playResult
+            .then(() => {
+              setIsPlaying(true)
+            })
+            .catch((error) => {
+              console.warn("Play failed:", error.name)
+              setIsPlaying(false)
+
+              // Only show user-facing errors for important cases
+              if (error.name === "NotAllowedError") {
+                alert("Please interact with the page first to enable music.")
+              }
+            })
+        } else {
+          // For browsers that don't return a promise, assume success
+          setIsPlaying(true)
+        }
       }
+    } catch (error) {
+      console.warn("Audio toggle error:", error)
+      setIsPlaying(false)
+    } finally {
+      // Add a small delay to prevent rapid clicking issues
+      setTimeout(() => {
+        setIsProcessing(false)
+      }, 300)
     }
-  }, [audioLoaded, isPlaying, userInteracted])
+  }, [audioReady, isPlaying, userInteracted, isProcessing])
 
   useEffect(() => {
     const audio = audioRef.current
     if (!audio) return
 
-    const handleCanPlayThrough = () => {
-      setAudioLoaded(true)
-      console.log("Audio loaded successfully")
+    const handleCanPlay = () => {
+      setAudioReady(true)
+      console.log("Audio ready to play")
     }
 
     const handlePlay = () => {
@@ -175,80 +189,53 @@ export default function BirthdayMemoryWebsite() {
 
     const handleEnded = () => {
       setIsPlaying(false)
-      playPromiseRef.current = null
     }
 
-    const handleError = (e: Event) => {
+    const handleError = () => {
       setIsPlaying(false)
-      setAudioLoaded(false)
-      playPromiseRef.current = null
-      console.error("Audio loading error:", e)
+      setAudioReady(false)
+      console.warn("Audio error occurred")
     }
 
     const handleLoadStart = () => {
       console.log("Audio loading started")
     }
 
-    const handleLoadedData = () => {
-      setAudioLoaded(true)
-      console.log("Audio data loaded")
-    }
-
-    const handleWaiting = () => {
-      console.log("Audio waiting for data")
-    }
-
-    const handleStalled = () => {
-      console.log("Audio stalled")
-    }
-
-    // Add all event listeners
-    audio.addEventListener("canplaythrough", handleCanPlayThrough)
+    // Add minimal event listeners
+    audio.addEventListener("canplay", handleCanPlay)
     audio.addEventListener("play", handlePlay)
     audio.addEventListener("pause", handlePause)
     audio.addEventListener("ended", handleEnded)
     audio.addEventListener("error", handleError)
     audio.addEventListener("loadstart", handleLoadStart)
-    audio.addEventListener("loadeddata", handleLoadedData)
-    audio.addEventListener("waiting", handleWaiting)
-    audio.addEventListener("stalled", handleStalled)
 
-    // Set audio properties
-    audio.preload = "auto"
+    // Set basic audio properties
     audio.loop = true
+    audio.volume = 0.6
+    audio.preload = "auto"
 
     // Load the audio
     audio.load()
 
     return () => {
       // Clean up event listeners
-      audio.removeEventListener("canplaythrough", handleCanPlayThrough)
+      audio.removeEventListener("canplay", handleCanPlay)
       audio.removeEventListener("play", handlePlay)
       audio.removeEventListener("pause", handlePause)
       audio.removeEventListener("ended", handleEnded)
       audio.removeEventListener("error", handleError)
       audio.removeEventListener("loadstart", handleLoadStart)
-      audio.removeEventListener("loadeddata", handleLoadedData)
-      audio.removeEventListener("waiting", handleWaiting)
-      audio.removeEventListener("stalled", handleStalled)
-    }
-  }, [])
-
-  // Cleanup on unmount
-  useEffect(() => {
-    return () => {
-      if (playPromiseRef.current) {
-        playPromiseRef.current.catch(() => {
-          // Ignore errors on cleanup
-        })
-      }
     }
   }, [])
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-peach-50 to-rose-50 relative overflow-hidden">
-      {/* Background Audio */}
-      <audio ref={audioRef} preload="auto" playsInline crossOrigin="anonymous">
+      {/* Background Audio - Simplified */}
+      <audio ref={audioRef} preload="auto" playsInline>
+        <source
+          src="https://hebbkx1anhila5yf.public.blob.vercel-storage.com/Perfect-%28Mr-Jat.in%29-yh8zTfTc4M985YIy9396X6HNHqVUo2.mp3"
+          type="audio/mpeg"
+        />
         <source src="/Perfect-(Mr-Jat.in).mp3" type="audio/mpeg" />
         Your browser does not support the audio element.
       </audio>
@@ -258,10 +245,10 @@ export default function BirthdayMemoryWebsite() {
         <VinylPlayer isPlaying={isPlaying} togglePlay={toggleMusic} />
       </div>
 
-      {/* User Interaction Prompt */}
+      {/* Simple Status Display */}
       {!userInteracted && (
         <div className="fixed top-20 right-4 bg-peach-100 border border-peach-400 text-peach-700 px-4 py-3 rounded z-50 max-w-sm text-sm">
-          <strong>🎵 Music Ready!</strong> Click anywhere to enable audio playback.
+          <strong>🎵 Music Ready!</strong> Click the vinyl record to play "Perfect" by Ed Sheeran.
         </div>
       )}
 
